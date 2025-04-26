@@ -1,5 +1,5 @@
 # PZEM-004T V3 Library for Raspberry Pi Pico
-PZEM-004T V3 Datasheet: [https://innovatorsguru.com/wp-content/uploads/2019/06/PZEM-004T-V3.0-Datasheet-User-Manual.pdf]
+PZEM-004T V3 Datasheet: https://innovatorsguru.com/wp-content/uploads/2019/06/PZEM-004T-V3.0-Datasheet-User-Manual.pdf
 
 ## Implemented:
 - Set alarm threshold.
