@@ -13,7 +13,7 @@
 #include "modbus_crc16.h"
 
 #define READ_TIMEOUT (10 * 1000) // us
-#define CORRECT_RESPONSE_LENGTH 25
+#define CORRECT_RESPONSE_LENGTH(num_registers) (5 + (num_registers * 2))
 #define ERROR_RESPONSE_LENGTH 5
 #define RESPONSE_HEADER_LENGTH 3
 
@@ -28,6 +28,9 @@
 #define POWER_FACTOR_OFFSET (RESPONSE_HEADER_LENGTH + (PZEM_REG_POWER_FACTOR * 2))
 #define ALARM_STATUS_OFFSET (RESPONSE_HEADER_LENGTH + (PZEM_REG_ALARM_STATUS * 2))
 
+#define ALARM_THR_OFFSET (RESPONSE_HEADER_LENGTH)
+#define SLAVE_ADDR_OFFSET (RESPONSE_HEADER_LENGTH + 2)
+
 static uart_inst_t *uart = NULL;
 
 static bool __debug = false;
@@ -41,7 +44,7 @@ static bool __debug = false;
  *
  * @param slave_addr The address of the slave device. Must be within the valid range
  *                   or equal to the general broadcast address.
- * @param cmd        The Modbus function code to execute.
+ * @param cmd        The Modbus function code to execute. If cmd is PZEM_CMD_RST, the next arguments are ignored.
  * @param reg_addr   The register address to access.
  * @param reg_num    The register value to write or number of registers to access.
  * @return true if the command was successfully sent, false otherwise.
@@ -67,9 +70,15 @@ static bool __send_command(uint8_t slave_addr, uint8_t cmd, uint16_t reg_addr, u
     tx_buffer[5] = reg_num & 0xFF;         // Register number/value low byte
 
     // Calculate CRC
-    crc = modbus_CRC16(tx_buffer, 6);
-    tx_buffer[6] = crc & 0xFF;         // CRC low byte
-    tx_buffer[7] = (crc >> 8) & 0xFF;  // CRC high byte
+    if (cmd != PZEM_CMD_RST) {
+        crc = modbus_CRC16(tx_buffer, 6);
+        tx_buffer[6] = crc & 0xFF;         // CRC low byte
+        tx_buffer[7] = (crc >> 8) & 0xFF;  // CRC high byte
+    } else {
+        crc = modbus_CRC16(tx_buffer, 2);
+        tx_buffer[2] = crc & 0xFF;         // CRC low byte
+        tx_buffer[3] = (crc >> 8) & 0xFF;  // CRC high byte
+    }
     
     // Send the command over UART
     if (__debug) {
@@ -79,7 +88,7 @@ static bool __send_command(uint8_t slave_addr, uint8_t cmd, uint16_t reg_addr, u
         }
         printf("CRC: %04X\n", crc);
     }
-    uart_write_blocking(uart, tx_buffer, sizeof(tx_buffer));
+    uart_write_blocking(uart, tx_buffer, (cmd == PZEM_CMD_RST) ? 4 : sizeof(tx_buffer));
 
     return true;
 }
@@ -239,13 +248,13 @@ bool pzem004t_read_data(uint16_t slave_addr, pzem004t_data_t *data) {
         return false; // Invalid slave address
     }
 
-    if (!__send_command(slave_addr, PZEM_CMD_RIR, 0x0000, 10)) {
+    if (!__send_command(slave_addr, PZEM_CMD_RHR, 0x0000, 10)) {
         return false;
     }
 
-    uint8_t rx_buffer[CORRECT_RESPONSE_LENGTH];
+    uint8_t rx_buffer[CORRECT_RESPONSE_LENGTH(10)];
     uint16_t bytes_read = __read_response(rx_buffer, sizeof(rx_buffer));
-    if (bytes_read < CORRECT_RESPONSE_LENGTH) {
+    if (bytes_read < CORRECT_RESPONSE_LENGTH(10)) {
         if (__debug) {
             if ((bytes_read == ERROR_RESPONSE_LENGTH) && (rx_buffer[1] == PZEM_ERR_RESPONSE)) {
                 printf("PZEM-004T: Error %02X\n", rx_buffer[2]);
@@ -293,6 +302,91 @@ bool pzem004t_read_data(uint16_t slave_addr, pzem004t_data_t *data) {
 
     data->alarm_status = (rx_buffer[ALARM_STATUS_OFFSET+1]) |
                          (rx_buffer[ALARM_STATUS_OFFSET] << 8);
+
+    return true;
+}
+
+bool pzem004t_read_params(uint16_t slave_addr, pzem004t_params_t *params) {
+    if (uart == NULL) {
+        return false; // UART not initialized
+    }
+
+    if ((slave_addr != PZEM_SLAVE_ADDR_GENERAL) && (slave_addr < PZEM_SLAVE_ADDR_MIN || slave_addr > PZEM_SLAVE_ADDR_MAX)) {
+        return false; // Invalid slave address
+    }
+
+    if (!__send_command(slave_addr, PZEM_CMD_RIR, 0x0000, 2)) {
+        return false;
+    }
+
+    uint8_t rx_buffer[CORRECT_RESPONSE_LENGTH(2)];
+    uint16_t bytes_read = __read_response(rx_buffer, sizeof(rx_buffer));
+    if (bytes_read < CORRECT_RESPONSE_LENGTH(2)) {
+        if (__debug) {
+            if ((bytes_read == ERROR_RESPONSE_LENGTH) && (rx_buffer[1] == PZEM_ERR_RESPONSE)) {
+                printf("PZEM-004T: Error %02X\n", rx_buffer[2]);
+            } else {
+                printf("PZEM-004T: Response too short (%d bytes)\n", bytes_read);       
+            }
+        }
+        return false;
+    }
+
+    // Check CRC
+    if (!modbus_checkCRC(rx_buffer, bytes_read)) {
+        if (__debug) {
+            printf("PZEM-004T: CRC error\n");
+        }
+        return false;
+    }
+    if (__debug) {
+        printf("PZEM-004T: Response OK\n");
+    }
+
+    params->alarm_thr = (rx_buffer[ALARM_THR_OFFSET+1]) |
+                    (rx_buffer[ALARM_THR_OFFSET] << 8);
+    params->slave_addr = (rx_buffer[SLAVE_ADDR_OFFSET+1]) |
+                    (rx_buffer[SLAVE_ADDR_OFFSET] << 8);
+
+    return true;
+}
+
+bool pzem004t_reset_energy(uint16_t slave_addr) {
+    if (uart == NULL) {
+        return false; // UART not initialized
+    }
+
+    if ((slave_addr != PZEM_SLAVE_ADDR_GENERAL) && (slave_addr < PZEM_SLAVE_ADDR_MIN || slave_addr > PZEM_SLAVE_ADDR_MAX)) {
+        return false; // Invalid slave address
+    }
+
+    if (!__send_command(slave_addr, PZEM_CMD_RST, 0x0000, 0x0000)) {
+        return false;
+    }
+
+    uint8_t rx_buffer[5];
+    uint16_t bytes_read = __read_response(rx_buffer, sizeof(rx_buffer));
+    if (bytes_read != 4) {
+        if (__debug) {
+            if ((bytes_read == ERROR_RESPONSE_LENGTH) && (rx_buffer[1] == PZEM_ERR_RESPONSE_RST)) {
+                printf("PZEM-004T: Error %02X\n", rx_buffer[2]);
+            } else {
+                printf("PZEM-004T: Response too short (%d bytes)\n", bytes_read);       
+            }
+        }
+        return false;
+    }
+
+    // Check CRC
+    if (!modbus_checkCRC(rx_buffer, bytes_read)) {
+        if (__debug) {
+            printf("PZEM-004T: CRC error\n");
+        }
+        return false;
+    }
+    if (__debug) {
+        printf("PZEM-004T: Response OK\n");
+    }
 
     return true;
 }

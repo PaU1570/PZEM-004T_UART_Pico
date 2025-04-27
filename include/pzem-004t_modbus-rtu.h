@@ -48,6 +48,7 @@
 
 // Error codes
 #define PZEM_ERR_RESPONSE         0x86
+#define PZEM_ERR_RESPONSE_RST     0xC2
 #define PZEM_ERR_ILLEGAL_FUNCTION 0x01
 #define PZEM_ERR_ILLEGAL_ADDRESS  0x02
 #define PZEM_ERR_ILLEGAL_DATA     0x03
@@ -76,11 +77,19 @@ typedef struct {
     uint16_t alarm_status;
 } pzem004t_data_t;
 
+typedef struct {
+    uint16_t alarm_thr;
+    uint16_t slave_addr;
+} pzem004t_params_t;
+
 bool pzem004t_init(uart_inst_t *uart, uint gpio_uart_tx, uint gpio_uart_rx, bool debug);
 
 bool pzem004t_set_alarm_thr(uint16_t slave_addr, uint16_t alarm_thr);
 bool pzem004t_set_slave_addr(uint16_t new_slave_addr);
 
 bool pzem004t_read_data(uint16_t slave_addr, pzem004t_data_t *data);
+bool pzem004t_read_params(uint16_t slave_addr, pzem004t_params_t *params);
+
+bool pzem004t_reset_energy(uint16_t slave_addr);
 
 #endif
