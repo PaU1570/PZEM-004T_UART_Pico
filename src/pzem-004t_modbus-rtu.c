@@ -248,7 +248,7 @@ bool pzem004t_read_data(uint16_t slave_addr, pzem004t_data_t *data) {
         return false; // Invalid slave address
     }
 
-    if (!__send_command(slave_addr, PZEM_CMD_RHR, 0x0000, 10)) {
+    if (!__send_command(slave_addr, PZEM_CMD_RIR, 0x0000, 10)) {
         return false;
     }
 
@@ -256,10 +256,14 @@ bool pzem004t_read_data(uint16_t slave_addr, pzem004t_data_t *data) {
     uint16_t bytes_read = __read_response(rx_buffer, sizeof(rx_buffer));
     if (bytes_read < CORRECT_RESPONSE_LENGTH(10)) {
         if (__debug) {
-            if ((bytes_read == ERROR_RESPONSE_LENGTH) && (rx_buffer[1] == PZEM_ERR_RESPONSE)) {
-                printf("PZEM-004T: Error %02X\n", rx_buffer[2]);
+            if (bytes_read > 0) {
+                printf("PZEM-004T: Response length incorrect (%d bytes): ", bytes_read);
+                for (uint i = 0; i < bytes_read; i++) {
+                    printf("%02X ", rx_buffer[i]);
+                }
+                printf("\n");
             } else {
-                printf("PZEM-004T: Response too short (%d bytes)\n", bytes_read);       
+                printf("PZEM-004T: No response (0 bytes)\n");       
             }
         }
         return false;
